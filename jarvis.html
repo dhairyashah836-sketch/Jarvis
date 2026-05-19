@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>JARVIS Holographic Lab</title>
+
+<!-- Fonts -->
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+
+<style>
+body {
+  margin: 0;
+  overflow: hidden;
+  background: radial-gradient(circle at center, #001018 0%, #000 70%);
+  font-family: 'Orbitron', sans-serif;
+  color: cyan;
+}
+canvas {
+  display: block;
+}
+#hud {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  color: cyan;
+  text-shadow: 0 0 10px cyan;
+}
+.hud-panel {
+  margin-bottom: 10px;
+}
+#voice {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  font-size: 14px;
+}
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div class="hud-panel">JARVIS AI ONLINE</div>
+  <div class="hud-panel">Objects: <span id="objCount">0</span></div>
+  <div class="hud-panel">Gesture: <span id="gesture">None</span></div>
+</div>
+
+<div id="voice">Voice: <span id="voiceStatus">Idle</span></div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.158.0/examples/js/postprocessing/EffectComposer.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.158.0/examples/js/postprocessing/RenderPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.158.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<script>
+
+// ================== BASIC THREE SETUP ==================
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1000);
+camera.position.z = 6;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// Bloom
+const composer = new THREE.EffectComposer(renderer);
+const renderPass = new THREE.RenderPass(scene, camera);
+composer.addPass(renderPass);
+
+const bloom = new THREE.UnrealBloomPass(
+  new THREE.Vector2(innerWidth, innerHeight),
+  1.5, 0.4, 0.85
+);
+composer.addPass(bloom);
+
+// Light
+const light = new THREE.PointLight(0x00ffff, 2);
+scene.add(light);
+
+// ================== PARTICLES ==================
+const particleCount = 10000;
+const geo = new THREE.BufferGeometry();
+const positions = new Float32Array(particleCount * 3);
+
+for (let i = 0; i < particleCount; i++) {
+  positions[i*3] = (Math.random() - 0.5) * 20;
+  positions[i*3+1] = (Math.random() - 0.5) * 20;
+  positions[i*3+2] = (Math.random() - 0.5) * 20;
+}
+
+geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+const mat = new THREE.PointsMaterial({
+  color: 0x00ffff,
+  size: 0.05,
+  blending: THREE.AdditiveBlending,
+  transparent: true
+});
+
+const particles = new THREE.Points(geo, mat);
+scene.add(particles);
+
+// ================== OBJECTS ==================
+let objects = [];
+
+function spawnObject(x, y) {
+  const geometry = new THREE.TorusKnotGeometry(0.5, 0.15, 100, 16);
+  const material = new THREE.MeshStandardMaterial({
+    color: 0x00ffff,
+    emissive: 0x00ffff,
+    emissiveIntensity: 1,
+    metalness: 0.8,
+    roughness: 0.2
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(x, y, 0);
+  scene.add(mesh);
+  objects.push(mesh);
+  document.getElementById("objCount").innerText = objects.length;
+}
+
+// ================== HAND TRACKING ==================
+let handX = 0;
+let handY = 0;
+let currentGesture = "None";
+
+const videoElement = document.createElement('video');
+
+const hands = new Hands({
+  locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+});
+
+hands.setOptions({
+  maxNumHands: 1,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.7,
+  minTrackingConfidence: 0.5
+});
+
+hands.onResults(results => {
+  if (results.multiHandLandmarks.length > 0) {
+    const landmarks = results.multiHandLandmarks[0];
+    const index = landmarks[8];
+    const thumb = landmarks[4];
+
+    handX = (index.x - 0.5) * 10;
+    handY = -(index.y - 0.5) * 10;
+
+    const dist = Math.hypot(index.x - thumb.x, index.y - thumb.y);
+
+    if (dist < 0.05) {
+      currentGesture = "Pinch";
+      spawnObject(handX, handY);
+    } else {
+      currentGesture = "Open";
+    }
+
+    document.getElementById("gesture").innerText = currentGesture;
+  }
+});
+
+const cameraFeed = new Camera(videoElement, {
+  onFrame: async () => {
+    await hands.send({ image: videoElement });
+  },
+  width: 640,
+  height: 480
+});
+cameraFeed.start();
+
+// ================== VOICE ==================
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+const recognition = new SpeechRecognition();
+recognition.continuous = true;
+
+recognition.onresult = (event) => {
+  const transcript = event.results[event.results.length-1][0].transcript.toLowerCase();
+  document.getElementById("voiceStatus").innerText = transcript;
+
+  if (transcript.includes("spawn")) {
+    spawnObject(0,0);
+  }
+  if (transcript.includes("clear")) {
+    objects.forEach(obj => scene.remove(obj));
+    objects = [];
+    document.getElementById("objCount").innerText = 0;
+  }
+};
+
+recognition.start();
+
+// ================== ANIMATION ==================
+function animate() {
+  requestAnimationFrame(animate);
+
+  particles.rotation.y += 0.001;
+
+  objects.forEach(obj => {
+    obj.rotation.x += 0.01;
+    obj.rotation.y += 0.01;
+  });
+
+  light.position.set(handX, handY, 3);
+
+  composer.render();
+}
+
+animate();
+
+</script>
+</body>
+</html>
